@@ -5,7 +5,7 @@ import { checkMonitor } from './monitor';
 import { Database } from './db';
 import { sendNotification } from './notifications';
 import { MonitorState, Monitor } from './types';
-import htmlContent from '../frontend/index.html';
+import htmlContent from '../frontend/status.html';
 
 interface Env {
   DB: D1Database;
@@ -40,7 +40,6 @@ app.get('/api/config', (c) => {
   const safeConfig = {
     settings: {
       title: config.settings.title,
-      logo: config.settings.logo,
       tags: config.settings.tags,
       summary_exclusion: config.settings.summary_exclusion,
       // hide callback_url/secret
@@ -59,8 +58,8 @@ app.get('/api/status', async (c) => {
   const states = await db.getAllMonitorStates();
   const stateMap = new Map(states.map(s => [s.monitor_id, s]));
 
-  // Get recent history for status bars (last 30 checks ~ 30 minutes if checked every minute)
-  const allHistory = await db.getRecentHistory(30);
+  // Preserve check timestamps: 84 rolling ten-minute intervals end at now.
+  const allHistory = await db.getWindowHistory(Date.now() - 14 * 60 * 60 * 1000);
   const historyMap = new Map<string, any[]>();
   
   allHistory.forEach(h => {

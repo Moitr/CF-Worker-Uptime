@@ -4,17 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>System Status</title>
-    <link rel="icon" href="data:image/x-icon;base64,AAABAAEAAQEAAAEAIAAwAAAAFgAAACgAAAABAAAAAgAAAAEAIAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAA==">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { color-scheme: light; }
+        body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        .status-shell { max-width: 760px; }
+        .status-card { border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+        .status-card-header { border-bottom: 1px solid #e2e8f0; }
+        .status-row { min-height: 76px; }
+        .capsule { height: 12px; border-radius: 999px; transition: opacity .15s; }
+        .capsule:hover { opacity: .78; }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
-    <div id="app" class="container mx-auto px-4 py-8">
-        <header class="mb-8 text-center flex flex-col items-center">
-            <img v-if="config.settings?.logo" :src="config.settings.logo" alt="Logo" class="h-16 w-16 mb-4 rounded-full shadow-lg">
-            <h1 class="text-3xl font-bold text-gray-800">{{ config.settings?.title || 'System Status' }}</h1>
-            <p class="text-gray-600 mt-2" v-if="lastUpdated">Last updated: {{ lastUpdated }}</p>
+<body class="bg-slate-50 min-h-screen text-slate-900">
+    <div id="app" class="status-shell mx-auto px-4 py-8 md:py-12">
+        <header class="mb-8 flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-semibold tracking-tight text-slate-900">{{ config.settings?.title || 'System Status' }}</h1>
+                <p class="text-sm text-slate-500 mt-1" v-if="lastUpdated">Last updated {{ lastUpdated }}</p>
+            </div>
         </header>
 
         <div v-if="loading" class="text-center text-gray-500">Loading status...</div>
@@ -22,30 +32,30 @@
 
         <div v-else class="space-y-8">
             <!-- Overall Status -->
-            <div class="bg-white rounded-lg shadow-md p-6 text-center">
-                <div v-if="overallStatus === 'UP'" class="flex flex-col items-center">
-                    <div class="bg-green-100 p-4 rounded-full mb-4">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div class="status-card mb-6 p-4">
+                <div v-if="overallStatus === 'UP'" class="flex items-center gap-3 text-green-700">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-full bg-green-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                         </svg>
                     </div>
-                    <h2 class="text-2xl font-bold text-gray-800">All Systems Operational</h2>
+                    <div><h2 class="text-base font-medium">We’re fully operational</h2><p class="text-sm text-slate-500">We’re not aware of any issues affecting our systems.</p></div>
                 </div>
-                <div v-else-if="overallStatus === 'DEGRADED'" class="flex flex-col items-center">
-                    <div class="bg-yellow-100 p-4 rounded-full mb-4">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div v-else-if="overallStatus === 'DEGRADED'" class="flex items-center gap-3 text-amber-700">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
                     </div>
-                    <h2 class="text-2xl font-bold text-gray-800">Partial System Outage</h2>
+                    <h2 class="text-base font-medium">We’re experiencing degraded performance</h2>
                 </div>
-                <div v-else class="flex flex-col items-center">
-                    <div class="bg-red-100 p-4 rounded-full mb-4">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div v-else class="flex items-center gap-3 text-red-700">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-full bg-red-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                     </div>
-                    <h2 class="text-2xl font-bold text-gray-800">Major System Outage</h2>
+                    <h2 class="text-base font-medium">We’re currently experiencing issues</h2>
                 </div>
             </div>
 
@@ -100,16 +110,18 @@
             </div>
 
             <!-- Monitor Groups -->
-            <div v-for="group in statusData" :key="group.id" class="bg-white rounded-lg shadow-md overflow-hidden">
-                <div class="bg-gray-50 px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-xl font-semibold text-gray-700">{{ group.name }}</h2>
+            <div v-for="group in statusData" :key="group.id" class="mb-6">
+                <div class="mb-2 px-1"><h2 class="text-base font-medium text-slate-900">{{ group.name }}</h2></div>
+                <div class="status-card overflow-hidden">
+                <div class="status-card-header px-4 py-3 text-sm font-medium text-slate-900">
+                    System status
                 </div>
                 <div class="divide-y divide-gray-100">
-                    <div v-for="monitor in group.monitors" :key="monitor.id" class="p-6">
-                        <div class="flex items-center justify-between mb-4">
+                    <div v-for="monitor in group.monitors" :key="monitor.id" class="status-row px-4 py-4">
+                        <div class="flex items-center justify-between">
                             <div class="flex items-center space-x-3">
                                 <div class="w-2.5 h-2.5 rounded-full" :class="getStatusColor(monitor.state.status)"></div>
-                                <div class="font-medium text-gray-700">
+                                <div class="text-sm font-medium text-slate-800">
                                     {{ monitor.name }}
                                     <span v-if="monitor.tags" class="ml-2 inline-flex space-x-1">
                                         <span v-for="tag in monitor.tags" :key="typeof tag === 'string' ? tag : tag.name"
@@ -139,9 +151,14 @@
                         </div>
 
                         <!-- Status Bar -->
-                        <div class="flex space-x-0.5 mt-2 h-2.5 w-full rounded-sm overflow-hidden bg-gray-100">
+                        <div class="flex items-center justify-between mt-4 mb-2 text-xs text-slate-500">
+                            <button @click="previousDay" class="px-2 py-1 rounded hover:bg-gray-100 disabled:opacity-30" :disabled="dayOffset >= 13" aria-label="Previous day">←</button>
+                            <span>{{ selectedDayLabel }}</span>
+                            <button @click="nextDay" class="px-2 py-1 rounded hover:bg-gray-100 disabled:opacity-30" :disabled="dayOffset === 0" aria-label="Next day">→</button>
+                        </div>
+                        <div class="flex gap-1 h-3 w-full" :title="'Hourly status for ' + selectedDayLabel">
                              <div v-for="(check, index) in getRecentChecks(monitor)" :key="index"
-                                  class="flex-1 rounded-[1px]"
+                                  class="capsule flex-1 min-w-0"
                                   :class="getCheckColor(check)"
                                   :title="check ? (new Date(check.timestamp).toLocaleString() + ' - ' + check.status + ' (' + check.latency + 'ms)') : 'No Data'">
                              </div>
@@ -158,17 +175,11 @@
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
 
-        <footer class="mt-8 text-center text-gray-500 text-sm pb-4">
-            <p>
-                Powered by 
-                <a href="https://github.com/afoim/CF-Worker-Uptime" target="_blank" class="text-blue-500 hover:underline">
-                    CF-Worker-Uptime
-                </a>
-            </p>
-        </footer>
+        <footer class="mt-10 text-center text-gray-400 text-xs pb-4">Availability metrics are reported at an aggregate level across all monitored services.</footer>
     </div>
 
     <script>
@@ -186,7 +197,13 @@
                 const loading = ref(true);
                 const error = ref(null);
                 const lastUpdated = ref('');
+                const dayOffset = ref(0);
                 const charts = {}; // Store chart instances
+
+                const selectedDayLabel = Vue.computed(() => {
+                    const date = new Date(Date.now() - dayOffset.value * 86400000);
+                    return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                });
 
                 const getIncidentColor = (type, status) => {
                     if (status === 'resolved' || status === 'completed') return 'border-green-500';
@@ -339,15 +356,17 @@
 
                 const getRecentChecks = (monitor) => {
                     const checks = monitor.recent_checks || [];
-                    const limit = 30;
-                    // Ensure we have exactly 'limit' items for consistent bar width
-                    // If we have less, pad with null (gray)
-                    const result = [...checks];
-                    while (result.length < limit) {
-                        result.unshift(null); // Add empty slots at the beginning (older)
-                    }
-                    return result; // result is sorted by timestamp asc
+                    const target = new Date(Date.now() - dayOffset.value * 86400000);
+                    target.setMinutes(0, 0, 0);
+                    target.setHours(0);
+                    return Array.from({ length: 24 }, (_, hour) => {
+                        const timestamp = target.getTime() + hour * 3600000;
+                        return checks.find(check => Math.abs(check.timestamp - timestamp) < 1800000) || null;
+                    });
                 };
+
+                const previousDay = () => { if (dayOffset.value < 13) dayOffset.value++; };
+                const nextDay = () => { if (dayOffset.value > 0) dayOffset.value--; };
 
                 const getCheckColor = (check) => {
                     if (!check) return 'bg-gray-200'; // No data
@@ -429,20 +448,6 @@
                             document.title = config.value.settings.title;
                         }
 
-                        // Update favicon
-                        if (config.value.settings?.logo) {
-                            // Remove existing favicon links
-                            const existingLinks = document.querySelectorAll("link[rel*='icon']");
-                            existingLinks.forEach(l => l.remove());
-
-                            // Create new favicon link
-                            const link = document.createElement('link');
-                            link.type = 'image/x-icon';
-                            link.rel = 'shortcut icon';
-                            link.href = config.value.settings.logo;
-                            document.getElementsByTagName('head')[0].appendChild(link);
-                        }
-                        
                         lastUpdated.value = new Date().toLocaleString();
                     } catch (e) {
                         error.value = e.message + '. Please check API_URL configuration.';
@@ -515,6 +520,10 @@
                     loading,
                     error,
                     lastUpdated,
+                    dayOffset,
+                    selectedDayLabel,
+                    previousDay,
+                    nextDay,
                     getStatusColor,
                     getStatusTextColor,
                     toggleChart,

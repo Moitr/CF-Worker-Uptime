@@ -52,6 +52,10 @@ export class Database {
         history.message
       )
       .run();
+    await this.db
+      .prepare('DELETE FROM check_history WHERE timestamp < ?')
+      .bind(Date.now() - 14 * 24 * 60 * 60 * 1000)
+      .run();
   }
 
   async getHistory(monitorId: string, limit: number = 50): Promise<CheckHistory[]> {
@@ -75,6 +79,35 @@ export class Database {
       .bind(limit)
       .all<CheckHistory>();
     return results.sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  // Keep actual check timestamps for the rolling ten-minute frontend buckets.
+  async getWindowHistory(since: number): Promise<CheckHistory[]> {
+    const { results } = await this.db
+      .prepare('SELECT monitor_id, timestamp, status, latency FROM check_history WHERE timestamp >= ? ORDER BY timestamp ASC')
+      .bind(since)
+      .all<CheckHistory>();
+    return results;
+  }
+
+  async getHourlyHistory(since: number): Promise<CheckHistory[]> {
+    const { results } = await this.db
+      .prepare('SELECT * FROM check_history WHERE timestamp >= ? ORDER BY timestamp ASC')
+      .bind(since)
+      .all<CheckHistory>();
+    const buckets = new Map<string, CheckHistory>();
+    const rank: Record<string, number> = { UP: 1, DEGRADED: 2, DOWN: 3 };
+    for (const item of results) {
+      const timestamp = Math.floor(item.timestamp / 3600000) * 3600000;
+      const key = `${item.monitor_id}:${timestamp}`;
+      const current = buckets.get(key);
+      if (!current || rank[item.status] > rank[current.status]) {
+        buckets.set(key, { ...item, timestamp });
+      } else if (current) {
+        current.latency = Math.round((current.latency + item.latency) / 2);
+      }
+    }
+    return [...buckets.values()].sort((a, b) => a.timestamp - b.timestamp);
   }
 
   async getAllMonitorStates(): Promise<MonitorState[]> {
