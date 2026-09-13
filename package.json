@@ -4,8 +4,9 @@
   "description": "Cloudflare Worker Uptime Monitor",
   "main": "src/index.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "deploy": "wrangler deploy"
+    "test": "node --test tests/*.test.cjs",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",

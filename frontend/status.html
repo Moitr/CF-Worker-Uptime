@@ -161,7 +161,7 @@
     const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const HOUR = 3600000;
     const DAY = 24 * HOUR;
-    const state = { config:{}, groups:[], incidents:[], expanded:new Set(), chartOpen:new Set(), histories:new Map(), dayOffset:0, loaded:false, fetching:false, notifications:false, updatedAt:0 };
+    const state = { config:{}, groups:[], incidents:[], expanded:new Set(), chartOpen:new Set(), histories:new Map(), dayOffset:0, loaded:false, fetching:false, notifications:false, updatedAt:0, dataUpdatedAt:0, failures:0, retryAt:0 };
     const known = status => ['UP','DOWN','DEGRADED'].includes(status);
     const statusLabel = status => ({UP:'Operational',DOWN:'Outage',DEGRADED:'Degraded performance',UNKNOWN:'No data'}[status] || 'No data');
     const checkStatus = (check, monitor) => { if (!check || check.status === 'DOWN') return check?.status === 'DOWN' ? 'DOWN' : 'UNKNOWN'; if (check.status === 'DEGRADED' || Number(check.latency) > Number(monitor.expected_latency || Infinity)) return 'DEGRADED'; return 'UP'; };
@@ -272,23 +272,53 @@
       $('active-incidents').innerHTML = '<div class="card-heading"><h2>Active incidents & maintenance</h2></div>'+state.incidents.filter(i => !completed(i)).map(incidentHTML).join('');
       renderRoute();
     }
-    async function getJSON(path) {
+    let refreshTimer;
+    async function getJSON(path, withMetadata = false) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(),15000);
       try {
         const response = await fetch(API_URL+path,{signal:controller.signal,cache:'no-store'});
-        if (!response.ok) throw new Error(`Request failed (${response.status})`);
-        return await response.json();
+        const retrySeconds = Number(response.headers.get('Retry-After')) || 0;
+        const retryAt = retrySeconds > 0 ? Date.now() + retrySeconds * 1000 : 0;
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}));
+          const error = new Error(detail.code === 'D1_DAILY_LIMIT' || detail.error === 'D1_DAILY_LIMIT'
+            ? 'Daily monitoring data quota reached.' : `Unable to load monitoring data (${response.status}).`);
+          error.retryAt = Number(detail.retryAt) || retryAt;
+          error.code = detail.error || detail.code;
+          throw error;
+        }
+        const data = await response.json();
+        return withMetadata ? {data, stale:response.headers.get('X-Status-Stale') === 'true',
+          updatedAt:Number(response.headers.get('X-Status-Updated-At')) || Date.now(),
+          code:response.headers.get('X-Status-Error'), retryAt} : data;
       } finally { clearTimeout(timeout); }
     }
+    function scheduleRefresh() {
+      clearTimeout(refreshTimer);
+      if (!document.hidden) refreshTimer = setTimeout(fetchData, Math.max(60000, state.retryAt - Date.now()));
+    }
+    function showDataNotice(message, retryAt = 0) {
+      $('error').textContent = message;
+      if (retryAt > Date.now()) $('error').textContent += ` Next attempt: ${formatTime(retryAt)}.`;
+      const retry = document.createElement('button');
+      retry.className = 'text-button';
+      retry.textContent = 'Retry';
+      retry.disabled = retryAt > Date.now();
+      retry.addEventListener('click', fetchData);
+      $('error').appendChild(retry);
+      $('error').hidden = false;
+    }
     async function fetchData() {
-      if (state.fetching) return;
+      if (state.fetching || document.hidden) return;
+      if (state.retryAt > Date.now()) { scheduleRefresh(); return; }
       state.fetching = true;
       try {
-        const [config,groups] = await Promise.all([getJSON('/api/config'),getJSON('/api/status')]);
+        const [config,statusResponse] = await Promise.all([getJSON('/api/config'),getJSON('/api/status', true)]);
+        const groups = statusResponse.data;
         if (!Array.isArray(groups) || !groups.every(g => Array.isArray(g.monitors))) throw new Error('Invalid status response');
         const previous = new Map(state.groups.flatMap(g => g.monitors).map(m => [m.id,m.state?.status]));
-        if (state.loaded && state.notifications && 'Notification' in window && Notification.permission === 'granted') {
+        if (!statusResponse.stale && state.loaded && state.notifications && 'Notification' in window && Notification.permission === 'granted') {
           for (const monitor of groups.flatMap(g => g.monitors)) {
             if (previous.has(monitor.id) && previous.get(monitor.id) !== monitor.state?.status) {
               try { new Notification(`${monitor.name}: ${statusLabel(monitor.state?.status)}`,{body:`${config.settings?.title || 'System Status'} — Service status changed.`,tag:monitor.id}); } catch { state.notifications = false; }
@@ -296,14 +326,17 @@
           }
         }
         state.config = config; state.groups = groups; state.incidents = config.incidents || [];
-        state.loaded = true; state.updatedAt = Date.now();
+        state.loaded = true; state.updatedAt = Date.now(); state.dataUpdatedAt = statusResponse.updatedAt;
+        state.failures = 0; state.retryAt = statusResponse.retryAt;
         $('error').hidden = true;
         render();
+        if (statusResponse.stale) showDataNotice(`${statusResponse.code === 'D1_DAILY_LIMIT' ? 'Daily monitoring data quota reached.' : 'Unable to refresh monitoring data.'} Showing saved data from ${formatTime(state.dataUpdatedAt)}.`, state.retryAt);
       } catch (error) {
-        $('error').innerHTML = `${state.loaded ? 'Unable to refresh. Showing the last available status from '+escapeHTML(formatTime(state.updatedAt))+'.' : 'Unable to load system status. Please try again.'} <button class="text-button" id="retry">Retry</button>`;
-        $('error').hidden = false;
-        $('retry').addEventListener('click',fetchData);
-      } finally { state.fetching = false; $('loading').hidden = true; }
+        state.failures++;
+        state.retryAt = Math.max(Number(error.retryAt) || 0, Date.now() + Math.min(900000, 60000 * 2 ** Math.min(state.failures-1, 4)));
+        const message = error.code === 'D1_DAILY_LIMIT' ? 'Daily monitoring data quota reached.' : 'Unable to load monitoring data.';
+        showDataNotice(message + (state.loaded ? ` Showing saved data from ${formatTime(state.dataUpdatedAt || state.updatedAt)}.` : ''), state.retryAt);
+      } finally { state.fetching = false; $('loading').hidden = true; scheduleRefresh(); }
     }
     function chartHTML(id) {
       const history = state.histories.get(id);
@@ -384,9 +417,11 @@
         }
       }
     });
-    document.addEventListener('visibilitychange',() => { if (!document.hidden) fetchData(); });
+    document.addEventListener('visibilitychange',() => {
+      clearTimeout(refreshTimer);
+      if (!document.hidden) fetchData();
+    });
     fetchData();
-    setInterval(fetchData,60000);
   </script>
 </body>
 </html>

@@ -7,15 +7,22 @@ export class Database {
     this.db = db;
   }
 
+  private async measured<T>(operation: string, query: Promise<D1Result<T>>): Promise<D1Result<T>> {
+    const result = await query;
+    console.log(JSON.stringify({ event: 'd1_query', operation, rows_read: result.meta.rows_read,
+      rows_written: result.meta.rows_written, duration_ms: result.meta.duration }));
+    return result;
+  }
+
   async getMonitorState(monitorId: string): Promise<MonitorState | null> {
-    return await this.db
+    const { results } = await this.measured('monitor_state', this.db
       .prepare('SELECT * FROM monitors_state WHERE monitor_id = ?')
-      .bind(monitorId)
-      .first<MonitorState>();
+      .bind(monitorId).all<MonitorState>());
+    return results[0] || null;
   }
 
   async upsertMonitorState(state: MonitorState): Promise<void> {
-    await this.db
+    await this.measured('upsert_state', this.db
       .prepare(
         `INSERT INTO monitors_state (monitor_id, status, last_checked_at, last_latency, fail_count, first_fail_time, last_error)
          VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -36,35 +43,37 @@ export class Database {
         state.first_fail_time,
         state.last_error || null
       )
-      .run();
+      .run());
   }
 
   async addCheckHistory(history: CheckHistory): Promise<void> {
-    await this.db
-      .prepare(
-        'INSERT INTO check_history (monitor_id, timestamp, status, latency, message) VALUES (?, ?, ?, ?, ?)'
-      )
-      .bind(
-        history.monitor_id,
-        history.timestamp,
-        history.status,
-        history.latency,
-        history.message
-      )
-      .run();
-    await this.db
-      .prepare('DELETE FROM check_history WHERE timestamp < ?')
-      .bind(Date.now() - 14 * 24 * 60 * 60 * 1000)
-      .run();
+    await this.measured('insert_history', this.db
+      .prepare('INSERT INTO check_history (monitor_id, timestamp, status, latency, message) VALUES (?, ?, ?, ?, ?)')
+      .bind(history.monitor_id, history.timestamp, history.status, history.latency, history.message ?? null)
+      .run());
+  }
+
+  async cleanupHistory(now = Date.now()): Promise<number> {
+    const cutoff = now - 14 * 24 * 60 * 60 * 1000;
+    let deleted = 0;
+    // Bound each hourly invocation to four batches, so old backlogs drain gradually.
+    for (let batch = 0; batch < 4; batch++) {
+      const result = await this.measured('cleanup_history', this.db.prepare(
+        'DELETE FROM check_history WHERE id IN (SELECT id FROM check_history WHERE timestamp < ? ORDER BY timestamp LIMIT 500)'
+      ).bind(cutoff).run());
+      deleted += result.meta.changes;
+      if (result.meta.changes < 500) break;
+    }
+    return deleted;
   }
 
   async getHistory(monitorId: string, limit: number = 50): Promise<CheckHistory[]> {
-    const { results } = await this.db
+    const { results } = await this.measured('latency_history', this.db
       .prepare(
         'SELECT * FROM check_history WHERE monitor_id = ? ORDER BY timestamp DESC LIMIT ?'
       )
       .bind(monitorId, limit)
-      .all<CheckHistory>();
+      .all<CheckHistory>());
     return results.reverse(); // Return in chronological order
   }
 
@@ -83,10 +92,10 @@ export class Database {
 
   // Keep actual check timestamps for the rolling ten-minute frontend buckets.
   async getWindowHistory(since: number): Promise<CheckHistory[]> {
-    const { results } = await this.db
+    const { results } = await this.measured('status_history', this.db
       .prepare('SELECT monitor_id, timestamp, status, latency FROM check_history WHERE timestamp >= ? ORDER BY timestamp ASC')
       .bind(since)
-      .all<CheckHistory>();
+      .all<CheckHistory>());
     return results;
   }
 
@@ -111,9 +120,9 @@ export class Database {
   }
 
   async getAllMonitorStates(): Promise<MonitorState[]> {
-    const { results } = await this.db
+    const { results } = await this.measured('all_monitor_states', this.db
       .prepare('SELECT * FROM monitors_state')
-      .all<MonitorState>();
+      .all<MonitorState>());
     return results;
   }
 }

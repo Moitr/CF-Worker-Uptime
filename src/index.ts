@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { loadConfig } from './config';
 import { checkMonitor } from './monitor';
 import { Database } from './db';
+import { StatusCache, databaseFailure } from './status-cache';
 import { sendNotification } from './notifications';
 import { MonitorState, Monitor } from './types';
 import htmlContent from '../frontend/status.html';
@@ -25,7 +26,9 @@ function sanitizeMonitor(monitor: Monitor) {
   return safe;
 }
 
-app.use('*', cors());
+app.use('*', cors({ origin: '*', exposeHeaders: ['X-Status-Updated-At', 'X-Status-Stale', 'X-Status-Cache', 'X-Status-Error', 'Retry-After'] }));
+const statusCache = new StatusCache();
+const historyCache = new StatusCache();
 
 // --- Frontend ---
 app.get('/', (c) => {
@@ -54,43 +57,49 @@ app.get('/api/config', (c) => {
 });
 
 app.get('/api/status', async (c) => {
-  const db = new Database(c.env.DB);
-  const states = await db.getAllMonitorStates();
-  const stateMap = new Map(states.map(s => [s.monitor_id, s]));
-
-  // Preserve check timestamps: 84 rolling ten-minute intervals end at now.
-  const allHistory = await db.getWindowHistory(Date.now() - 14 * 60 * 60 * 1000);
-  const historyMap = new Map<string, any[]>();
-  
-  allHistory.forEach(h => {
-    if (!historyMap.has(h.monitor_id)) {
-      historyMap.set(h.monitor_id, []);
-    }
-    historyMap.get(h.monitor_id)?.push(h);
-  });
-  
   const config = loadConfig();
-  const result = config.groups.map(group => ({
-    ...group,
-    monitors: group.monitors.map(monitor => {
-      const state = stateMap.get(monitor.id);
-      const safeMonitor = sanitizeMonitor(monitor);
-      return {
-        ...safeMonitor,
-        state: state || { status: 'UNKNOWN', last_checked_at: 0, last_latency: 0 },
-        recent_checks: historyMap.get(monitor.id) || []
-      };
-    }),
-  }));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(config)));
+  const version = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  const key = new URL('/_status-cache/v1?config=' + version, c.req.url).href;
+  return statusCache.get(key, caches.default, async () => {
+    const db = new Database(c.env.DB);
+    const states = await db.getAllMonitorStates();
+    const stateMap = new Map(states.map(s => [s.monitor_id, s]));
 
-  return c.json(result);
+    // Preserve timestamps for 84 ten-minute capsules; the page anchors each row to its latest check.
+    const allHistory = await db.getWindowHistory(Date.now() - 14 * 60 * 60 * 1000);
+    const historyMap = new Map<string, any[]>();
+  
+    allHistory.forEach(h => {
+      if (!historyMap.has(h.monitor_id)) {
+        historyMap.set(h.monitor_id, []);
+      }
+      historyMap.get(h.monitor_id)?.push(h);
+    });
+  
+    const result = config.groups.map(group => ({
+      ...group,
+      monitors: group.monitors.map(monitor => {
+        const state = stateMap.get(monitor.id);
+        const safeMonitor = sanitizeMonitor(monitor);
+        return {
+          ...safeMonitor,
+          state: state || { status: 'UNKNOWN', last_checked_at: 0, last_latency: 0 },
+          recent_checks: historyMap.get(monitor.id) || []
+        };
+      }),
+    }));
+
+    return result;
+  });
 });
 
 app.get('/api/history/:id', async (c) => {
   const id = c.req.param('id');
-  const db = new Database(c.env.DB);
-  const history = await db.getHistory(id);
-  return c.json(history);
+  const monitor = loadConfig().groups.flatMap(group => group.monitors).find(m => m.id === id);
+  if (!monitor || monitor.display.history === false) return c.json({ error: 'NOT_FOUND' }, 404);
+  const key = new URL('/_history-cache/v1?id=' + encodeURIComponent(id), c.req.url).href;
+  return historyCache.get(key, caches.default, () => new Database(c.env.DB).getHistory(id));
 });
 
 // --- Cron Handler ---
@@ -98,6 +107,11 @@ app.get('/api/history/:id', async (c) => {
 async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
   const config = loadConfig();
   const db = new Database(env.DB);
+  if (event.cron === '7 * * * *') {
+    try { await db.cleanupHistory(event.scheduledTime); }
+    catch (error) { console.error(JSON.stringify({ event: 'history_cleanup_failed', ...databaseFailure(error) })); }
+    return;
+  }
 
   // Flatten monitors
   const monitors: Monitor[] = [];
@@ -157,9 +171,7 @@ async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionCo
 
     await db.upsertMonitorState(newState);
     
-    // Save history (maybe not every check if we want to save space, but for now every check)
-    // To save space, maybe only on change or every N minutes? 
-    // User asked for "display delay chart", so we need history.
+    // Retain one check per minute; cleanup runs separately once an hour.
     if (monitor.display.history !== false) {
        await db.addCheckHistory({
          monitor_id: monitor.id,
@@ -176,10 +188,13 @@ async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionCo
       const shouldNotify = !config.settings.notification_on_down_only || newStatus === 'DOWN';
       
       if (shouldNotify) {
-        await sendNotification(config, monitor, newStatus, checkResult.message || 'Status Changed', env);
+        await sendNotification(env, config, monitor, newStatus, checkResult.message || 'Status Changed');
       }
     }
   }));
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') console.error(JSON.stringify({ event: 'monitor_failed', monitor_id: monitors[index].id, ...databaseFailure(result.reason) }));
+  });
 }
 
 export default {

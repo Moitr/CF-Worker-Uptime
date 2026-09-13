@@ -7,7 +7,7 @@
 
   // Cron 触发器（每分钟执行一次）
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["* * * * *", "7 * * * *"]
   },
 
   // D1 数据库绑定
@@ -30,7 +30,7 @@
 
   // 可观测性配置
   "observability": {
-    "enabled": false,
+    "enabled": true,
     "head_sampling_rate": 1,
 
     "logs": {
@@ -38,12 +38,6 @@
       "head_sampling_rate": 1,
       "persist": true,
       "invocation_logs": true
-    },
-
-    "traces": {
-      "enabled": false,
-      "persist": true,
-      "head_sampling_rate": 1
     }
   }
 }

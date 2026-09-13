@@ -21,3 +21,5 @@ CREATE TABLE check_history (
 );
 
 CREATE INDEX idx_history_monitor_time ON check_history(monitor_id, timestamp);
+
+CREATE INDEX idx_history_timestamp ON check_history(timestamp);
