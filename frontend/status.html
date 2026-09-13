@@ -66,6 +66,8 @@
     .bar[data-status="DOWN"] { background:var(--down); }
     .bar[data-status="DEGRADED"] { background:var(--degraded); }
     .bar:hover,.bar:focus-visible { opacity:.7; }
+    .bar-meta { display:flex; flex-wrap:wrap; justify-content:space-between; column-gap:12px; font-size:11px; color:var(--muted); }
+    .bar-meta .stale { color:#b45309; }
     .components { margin:4px -16px -12px; padding:0 16px; border-top:0; background:#fff; }
     .monitor { padding:8px 0 9px; }
     .monitor+.monitor { border-top:0; }
@@ -148,7 +150,7 @@
     </main>
     <footer class="footer">
       <div class="powered">Powered by <a href="https://workers.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare Workers</a><span aria-hidden="true">·</span><a href="https://github.com/Moitr/CF-Worker-Uptime" target="_blank" rel="noopener noreferrer" aria-label="CF-Worker-Uptime on GitHub">CF-Worker-Uptime on GitHub</a></div>
-      <p class="disclaimer">Availability metrics are reported at an aggregate level across all monitored services. Individual service availability may vary. 84 ten-minute intervals cover the last 14 hours. The right edge is the latest refresh time.</p>
+      <p class="disclaimer">Availability metrics are reported at an aggregate level across all monitored services. Individual service availability may vary.</p>
     </footer>
   </div>
   <noscript><p class="empty">Please enable JavaScript to view live system status.</p></noscript>
@@ -174,14 +176,23 @@
     const completed = incident => ['resolved','completed'].includes(incident.status);
     const titleCase = text => String(text || '').replaceAll('_',' ').replace(/\b\w/g,c => c.toUpperCase());
     const safeURL = url => { try { const parsed = new URL(url); return ['https:','http:'].includes(parsed.protocol) ? escapeHTML(parsed.href) : ''; } catch { return ''; } };
-    function getWindow() {
-      const end = state.updatedAt || Date.now();
+    function getWindow(monitors = []) {
+      const now = state.updatedAt || Date.now();
       const count = 84;
       const step = 10 * 60 * 1000;
-      return {start:end-count*step, end, count, step};
+      let latest = null;
+      for (const monitor of monitors) {
+        if (monitor.display?.history === false) continue;
+        for (const check of monitor.recent_checks || []) {
+          const timestamp = Number(check.timestamp);
+          if (known(check.status) && Number.isFinite(timestamp) && timestamp > 0 && timestamp <= now && (latest === null || timestamp > latest)) latest = timestamp;
+        }
+      }
+      const end = latest ?? now;
+      return {start:end-count*step, end, count, step, latest, stale:latest !== null && now-latest > step};
     }
     function getBuckets(monitors) {
-      const {start,end,count,step} = getWindow();
+      const {start,end,count,step} = getWindow(monitors);
       const buckets = Array.from({length:count},(_,index) => ({time:start+index*step, checks:[]}));
       for (const monitor of monitors) {
         if (monitor.display?.history === false) continue;
@@ -202,11 +213,13 @@
       return checks.length ? `${(checks.filter(c => c.status === 'UP' || c.status === 'DEGRADED').length/checks.length*100).toFixed(2)}% uptime` : 'No data';
     }
     function bars(monitors) {
-      const {step, end} = getWindow();
-      return `<div class="bars" aria-label="Rolling status; each capsule covers 10 minutes; right edge is the latest refresh time">${getBuckets(monitors).map(bucket => {
-        const label = `${formatTime(bucket.time)} – ${formatTime(bucket.time + step) + (bucket.time + step === end ? ' (latest update)' : '')} — ${statusLabel(bucket.status)}${bucket.valid.length ? ` · ${bucket.valid.length} recorded checks` : ''}`;
+      const {start, step, end, latest, stale} = getWindow(monitors);
+      const description = latest === null ? 'No recorded checks' : '14-hour status history; each capsule covers 10 minutes; right edge is the latest recorded check';
+      const labels = latest === null ? '<span>No recorded checks</span>' : `<span>${escapeHTML(formatTime(start))}</span><span${stale ? ' class="stale"' : ''}>Last checked ${escapeHTML(formatTime(latest))}${stale ? ' · Updates delayed' : ''}</span>`;
+      return `<div class="timeline"><div class="bars" aria-label="${description}">${getBuckets(monitors).map(bucket => {
+        const label = `${formatTime(bucket.time)} – ${formatTime(bucket.time + step) + (latest !== null && bucket.time + step === end ? ' (latest check)' : '')} — ${statusLabel(bucket.status)}${bucket.valid.length ? ` · ${bucket.valid.length} recorded checks` : ''}`;
         return `<div class="bar" data-status="${bucket.status}" data-start="${bucket.time}" data-end="${bucket.time+step}" title="${escapeHTML(label)}" role="img" aria-label="${escapeHTML(label)}"></div>`;
-      }).join('')}</div>`;
+      }).join('')}</div><div class="bar-meta">${labels}</div></div>`;
     }
     function renderSummary() {
       const excluded = state.config.settings?.summary_exclusion || [];
@@ -240,13 +253,12 @@
       return `<div class="monitor"><div class="service-heading" data-status="${status}">${icon(status)}<span class="monitor-name">${link ? `<a href="${link}" target="_blank" rel="noopener noreferrer">${escapeHTML(monitor.name)}</a>` : escapeHTML(monitor.name)}</span>${tagsHTML(monitor.tags)}<span class="uptime" title="Percentage of recorded checks that were available (including degraded performance)">${uptime}</span></div>${monitor.display?.history !== false ? bars([monitor]) : ''}</div>`;
     }
     function renderGroups() {
-      const start = getWindow().start;
-      $('date-range').textContent = `${formatTime(getWindow().start)} – ${formatTime(state.updatedAt)}`;
+      $('date-range').textContent = '14-hour history';
       $('service-list').innerHTML = state.groups.length ? state.groups.map((group,index) => {
         const status = statusOf(group.monitors);
         const expanded = state.expanded.has(group.id);
         const historyMonitors = group.monitors.filter(m => m.display?.history !== false);
-        return `<article class="service${expanded ? ' expanded' : ''}"><div class="service-heading" data-status="${status}"><span class="indicator group-status-icon" title="${statusLabel(status)}" aria-label="${statusLabel(status)}">${icon(status)}</span><button class="group-toggle" data-group="${escapeHTML(group.id)}" aria-expanded="${expanded}" aria-controls="group-${index}"><span class="group-name">${escapeHTML(group.name)}</span><span class="component-count"><span class="info-icon" aria-hidden="true">i</span>${group.monitors.length} component${group.monitors.length === 1?'':'s'} ${chevron}</span></button><span class="uptime group-uptime" title="Percentage of recorded checks that were available (including degraded performance)">${historyMonitors.length?getUptime(historyMonitors):statusLabel(status)}</span></div>${historyMonitors.length?bars(historyMonitors).replace('class="bars"', `class="bars"${expanded?' hidden':''}`):''}<div class="components" id="group-${index}" ${expanded?'':'hidden'}>${group.monitors.map(m => monitorHTML(m)).join('')}</div></article>`;
+        return `<article class="service${expanded ? ' expanded' : ''}"><div class="service-heading" data-status="${status}"><span class="indicator group-status-icon" title="${statusLabel(status)}" aria-label="${statusLabel(status)}">${icon(status)}</span><button class="group-toggle" data-group="${escapeHTML(group.id)}" aria-expanded="${expanded}" aria-controls="group-${index}"><span class="group-name">${escapeHTML(group.name)}</span><span class="component-count"><span class="info-icon" aria-hidden="true">i</span>${group.monitors.length} component${group.monitors.length === 1?'':'s'} ${chevron}</span></button><span class="uptime group-uptime" title="Percentage of recorded checks that were available (including degraded performance)">${historyMonitors.length?getUptime(historyMonitors):statusLabel(status)}</span></div>${historyMonitors.length?bars(historyMonitors).replace('class="timeline"', `class="timeline"${expanded?' hidden':''}`):''}<div class="components" id="group-${index}" ${expanded?'':'hidden'}>${group.monitors.map(m => monitorHTML(m)).join('')}</div></article>`;
       }).join('') : '<p class="empty">No services have been configured yet.</p>';
     }
     function incidentHTML(incident) {
@@ -349,7 +361,7 @@
         service.querySelector('.group-uptime').setAttribute('aria-hidden', String(open));
         const components = $(group.getAttribute('aria-controls'));
         components.inert = !open;
-        animateDisclosure(service.querySelector(':scope > .bars'), !open);
+        animateDisclosure(service.querySelector(':scope > .timeline'), !open);
         animateDisclosure(components, open);
       }
       const day = event.target.closest('[data-day]');
